@@ -1,32 +1,26 @@
 # Implementation — 10.9.5-traffic.1
 
-P1/P2 are wired without editing the large upstream AVI writer.
+## Runtime
 
-## What runs
+`setup()` → `trafficSetup()`
 
-`setup()` calls `trafficSetup()` after `prepRecording()`.
+1. First-boot capture profile (VGA / 10 fps / event-only).
+2. Sidecar watcher: new AVI → `.jpg` + `.json` + CSV row.
+3. Vision queue (`src/trafficQueue.cpp`): enqueue that clip, analyze only while idle, abort when capture starts, persist JSON on the card, resume later.
 
-1. **First boot only** (`boardId` not in configs.txt): set VGA (`framesize=10`), 10 fps, quality 12, 3 s stop, 2 s min, max 300 frames, motion on, dashcam off, OV3660 vflip, America/Denver TZ, 400 MB SD reserve, `boardId=cam-1`. Then save. Later UI changes are kept.
-2. **Idle watcher** (core 1, 2 s): while `!isCapturing`, scan today's date folder. For each `*.avi` that has no sibling JSON, write:
-   - `/YYYYMMDD/YYYYMMDD_HHMMSS.jpg` from `alertBuffer` if still present
-   - `/YYYYMMDD/YYYYMMDD_HHMMSS.json`
-   - append `/traffic_log.csv`
-
-Motion-triggered AVI itself is still upstream MJPEG2SD. Classification is not on this path (SPEC P3).
+See [QUEUE.md](QUEUE.md).
 
 ## Files
 
 | Path | Role |
 |---|---|
-| `src/trafficSidecar.cpp` | profile + sidecar + watcher |
+| `src/trafficSidecar.cpp` | profile, sidecar, enqueue, abort-on-capture |
+| `src/trafficQueue.cpp` | `/review` JSON jobs + worker |
 | `ESP32-CAM_MJPEG2SD.ino` | `trafficSetup()` |
-| `ESP32-CAM_MJPEG2SD.h` | `CAMERA_MODEL_ESP32_S3_CAM`, `trafficSetup()` decl |
 | `SPEC.md` | product rules |
 
 ## Flash
 
-Arduino: ESP32S3 Dev Module, OPI PSRAM, 16 MB flash, 16MB partition, UART Type-C, arduino-esp32 >= 3.1.1. FAT32 U1 card inserted before power.
+Arduino: ESP32S3 Dev Module, OPI PSRAM, 16 MB, UART Type-C, arduino-esp32 >= 3.1.1. FAT32 U1 card in before power.
 
-Walk test: AVI plays in VLC, sibling `.jpg`/`.json`, CSV row. If camera init fails, switch define to `CAMERA_MODEL_FREENOVE_ESP32S3_CAM` once.
-
-Rename `boardId` to `cam-2` / `cam-3` in the web config for the other two units.
+Walk test: AVI + sidecar + `/review/jobs/<id>.json`. Start another walk while a job shows `running` — job must become `aborted` then `done` after the new clip closes.
