@@ -2,7 +2,7 @@
   Traffic monitor extras for this fork.
   - One-time capture defaults (VGA/10fps/event-only)
   - After an AVI is closed, write still JPEG + JSON sidecar + traffic_log.csv
-  No neural net. Classification is SPEC.md P3+.
+  - Enqueue clip for idle vision queue; abort that queue when capture starts
 */
 
 #include "appGlobals.h"
@@ -29,7 +29,6 @@ static bool stemFromAvi(const char* aviPath, char* folder, size_t folderLen, cha
   if (flen >= folderLen) return false;
   memcpy(folder, aviPath, flen);
   folder[flen] = 0;
-
   const char* base = slash + 1;
   size_t n = 0;
   while (base[n] && base[n] != '_' && n < 8) n++;
@@ -49,11 +48,7 @@ static bool stemFromAvi(const char* aviPath, char* folder, size_t folderLen, cha
 static void isoLocal(char* out, size_t outLen) {
   time_t epoch = getEpoch();
   struct tm* t = localtime(&epoch);
-  if (!t) {
-    strncpy(out, "1970-01-01T00:00:00", outLen - 1);
-    out[outLen - 1] = 0;
-    return;
-  }
+  if (!t) { strncpy(out, "1970-01-01T00:00:00", outLen - 1); out[outLen - 1] = 0; return; }
   strftime(out, outLen, "%Y-%m-%dT%H:%M:%S", t);
 }
 
@@ -66,10 +61,7 @@ static void ensureLogHeader() {
   }
   if (!needHdr) return;
   File f = STORAGE.open(TRAFFIC_LOG_PATH, FILE_WRITE);
-  if (!f) {
-    LOG_WRN("traffic: cannot create %s", TRAFFIC_LOG_PATH);
-    return;
-  }
+  if (!f) { LOG_WRN("traffic: cannot create %s", TRAFFIC_LOG_PATH); return; }
   f.println("ts,board_id,clip_id,duration_s,frames,motion_peak,status,avi,still");
   f.close();
 }
@@ -100,21 +92,22 @@ static void parseAviMeta(const char* aviPath, char* sizeStr, size_t sizeLen,
 void writeTrafficSidecar(const char* aviPath, uint16_t frames, uint32_t durationSec,
                          uint8_t recFps, const char* sizeStr) {
   if (!aviPath || !aviPath[0]) return;
-
   char folder[FILE_NAME_LEN];
   char clipId[24];
   if (!stemFromAvi(aviPath, folder, sizeof(folder), clipId, sizeof(clipId))) {
     LOG_WRN("traffic: bad avi path %s", aviPath);
     return;
   }
-
   char jsonPath[IN_FILE_NAME_LEN];
   snprintf(jsonPath, sizeof(jsonPath), "%s/%s.json", folder, clipId);
-  if (STORAGE.exists(jsonPath)) return;
-
+  if (STORAGE.exists(jsonPath)) {
+    char stillExisting[IN_FILE_NAME_LEN];
+    snprintf(stillExisting, sizeof(stillExisting), "%s/%s.jpg", folder, clipId);
+    trafficEnqueueJob(clipId, aviPath, STORAGE.exists(stillExisting) ? stillExisting : "", jsonPath);
+    return;
+  }
   char stillPath[IN_FILE_NAME_LEN];
   snprintf(stillPath, sizeof(stillPath), "%s/%s.jpg", folder, clipId);
-
   bool haveStill = false;
   if (alertBuffer != NULL && alertBufferSize > 0) {
     File jpg = STORAGE.open(stillPath, FILE_WRITE);
@@ -122,59 +115,28 @@ void writeTrafficSidecar(const char* aviPath, uint16_t frames, uint32_t duration
       size_t wr = jpg.write(alertBuffer, alertBufferSize);
       jpg.close();
       haveStill = (wr == alertBufferSize);
-      if (!haveStill) LOG_WRN("traffic: short still write %u/%u", (unsigned)wr, (unsigned)alertBufferSize);
     } else LOG_WRN("traffic: cannot write %s", stillPath);
   }
-
   char ts[24];
   isoLocal(ts, sizeof(ts));
-
   File js = STORAGE.open(jsonPath, FILE_WRITE);
   if (js) {
-    js.printf(
-      "{\n"
-      "  \"id\": \"%s\",\n"
-      "  \"board_id\": \"%s\",\n"
-      "  \"avi\": \"%s\",\n"
-      "  \"still\": \"%s\",\n"
-      "  \"started\": \"%s\",\n"
-      "  \"duration_s\": %lu,\n"
-      "  \"frames\": %u,\n"
-      "  \"fps\": %u,\n"
-      "  \"size\": \"%s\",\n"
-      "  \"motion_peak\": %.4f,\n"
-      "  \"light_level\": %u,\n"
-      "  \"status\": \"captured\"\n"
-      "}\n",
-      clipId,
-      boardId,
-      aviPath,
-      haveStill ? stillPath : "",
-      ts,
-      (unsigned long)durationSec,
-      frames,
-      recFps,
-      sizeStr ? sizeStr : "",
-      (double)clipMotionPeak,
-      lightLevel
-    );
+    js.printf("{\n  \"id\": \"%s\",\n  \"board_id\": \"%s\",\n  \"avi\": \"%s\",\n  \"still\": \"%s\",\n  \"started\": \"%s\",\n  \"duration_s\": %lu,\n  \"frames\": %u,\n  \"fps\": %u,\n  \"size\": \"%s\",\n  \"motion_peak\": %.4f,\n  \"light_level\": %u,\n  \"status\": \"captured\"\n}\n",
+      clipId, boardId, aviPath, haveStill ? stillPath : "", ts,
+      (unsigned long)durationSec, frames, recFps, sizeStr ? sizeStr : "",
+      (double)clipMotionPeak, lightLevel);
     js.close();
-  } else {
-    LOG_WRN("traffic: cannot write %s", jsonPath);
-    return;
-  }
-
+  } else { LOG_WRN("traffic: cannot write %s", jsonPath); return; }
   ensureLogHeader();
   File csv = STORAGE.open(TRAFFIC_LOG_PATH, FILE_APPEND);
   if (csv) {
-    csv.printf("%s,%s,%s,%lu,%u,%.4f,captured,%s,%s\n",
-               ts, boardId, clipId,
+    csv.printf("%s,%s,%s,%lu,%u,%.4f,captured,%s,%s\n", ts, boardId, clipId,
                (unsigned long)durationSec, frames, (double)clipMotionPeak,
                aviPath, haveStill ? stillPath : "");
     csv.close();
-  } else LOG_WRN("traffic: cannot append %s", TRAFFIC_LOG_PATH);
-
+  }
   LOG_INF("traffic sidecar %s still=%s peak=%.3f", jsonPath, haveStill ? "yes" : "no", (double)clipMotionPeak);
+  trafficEnqueueJob(clipId, aviPath, haveStill ? stillPath : "", jsonPath);
 }
 
 static void applyProfileOnce() {
@@ -184,7 +146,6 @@ static void applyProfileOnce() {
     LOG_INF("traffic board_id %s", boardId);
     return;
   }
-
   LOG_INF("traffic: applying first-boot capture profile");
   strncpy(boardId, "cam-1", BOARD_ID_LEN - 1);
   updateStatus("boardId", boardId, true);
@@ -207,10 +168,7 @@ static void applyProfileOnce() {
 
 static void scanFolderForAvis(const char* folder) {
   File root = STORAGE.open(folder);
-  if (!root || !root.isDirectory()) {
-    if (root) root.close();
-    return;
-  }
+  if (!root || !root.isDirectory()) { if (root) root.close(); return; }
   File file = root.openNextFile();
   while (file) {
     if (!file.isDirectory()) {
@@ -223,13 +181,9 @@ static void scanFolderForAvis(const char* folder) {
         if (name[0] == '/') strncpy(aviPath, name, sizeof(aviPath) - 1);
         else snprintf(aviPath, sizeof(aviPath), "%s/%s", folder, base);
         aviPath[sizeof(aviPath) - 1] = 0;
-
-        char sizeStr[12];
-        uint8_t recFps = 10;
-        uint32_t durationSec = 0;
+        char sizeStr[12]; uint8_t recFps = 10; uint32_t durationSec = 0;
         parseAviMeta(aviPath, sizeStr, sizeof(sizeStr), &recFps, &durationSec);
-        uint16_t frames = (uint16_t)(recFps * durationSec);
-        writeTrafficSidecar(aviPath, frames, durationSec, recFps, sizeStr);
+        writeTrafficSidecar(aviPath, (uint16_t)(recFps * durationSec), durationSec, recFps, sizeStr);
       }
     }
     file.close();
@@ -239,9 +193,14 @@ static void scanFolderForAvis(const char* folder) {
 }
 
 static void trafficTask(void* /*pv*/) {
+  static bool toldAbort = false;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(2000));
-    if (isCapturing) continue;
+    if (isCapturing) {
+      if (!toldAbort) { trafficAbortWorker("capture"); toldAbort = true; }
+      continue;
+    }
+    toldAbort = false;
     char folder[FILE_NAME_LEN];
     dateFormat(folder, sizeof(folder), true);
     scanFolderForAvis(folder);
@@ -251,7 +210,8 @@ static void trafficTask(void* /*pv*/) {
 void trafficSetup() {
 #ifndef AUXILIARY
   applyProfileOnce();
+  trafficQueueSetup();
   xTaskCreatePinnedToCore(trafficTask, "traffic", 4096, NULL, 1, NULL, 1);
-  LOG_INF("traffic monitor ready (event AVI + sidecar)");
+  LOG_INF("traffic monitor ready (event AVI + sidecar + vision queue)");
 #endif
 }
