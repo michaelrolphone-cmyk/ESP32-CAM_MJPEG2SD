@@ -1,8 +1,12 @@
-
 /*
 * User modifiable features
 *
 * s60sc 2026
+*
+* This fork (michaelrolphone-cmyk/ESP32-CAM_MJPEG2SD) targets the
+* ESP32-S3-CAM OV3660 N16R8 dual Type-C board. Read SPEC.md before
+* changing capture defaults. Classification is offline — do not add
+* a neural net on the AVI write path.
 */
 
 #pragma once
