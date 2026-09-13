@@ -1,0 +1,62 @@
+name: Arduino ESP32-S3 Build
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/arduino-build.yml"
+      - "ESP32-CAM_MJPEG2SD.ino"
+      - "ESP32-CAM_MJPEG2SD.h"
+      - "src/**"
+      - "data/**"
+      - "scripts/build_firmware.sh"
+  pull_request:
+    paths:
+      - ".github/workflows/arduino-build.yml"
+      - "ESP32-CAM_MJPEG2SD.ino"
+      - "ESP32-CAM_MJPEG2SD.h"
+      - "src/**"
+      - "data/**"
+      - "scripts/build_firmware.sh"
+  workflow_dispatch:
+
+concurrency:
+  group: arduino-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ESP32_CORE_VERSION: "3.3.11"
+  FQBN: "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi"
+
+jobs:
+  build:
+    name: Build ESP32-S3 N16R8 firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 Arduino core
+        shell: bash
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls \
+            https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}"
+
+      - name: Build firmware and flash images
+        run: bash scripts/build_firmware.sh
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ESP32-CAM_MJPEG2SD-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

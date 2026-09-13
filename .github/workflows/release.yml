@@ -1,0 +1,153 @@
+name: Cut release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/release-request.json"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to create (must match APP_VER)
+        required: true
+      commit_firmware:
+        description: Commit the merged full-flash image into firmware/
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+env:
+  ESP32_CORE_VERSION: "3.3.11"
+  FQBN: "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi"
+
+jobs:
+  request:
+    name: Validate release request
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.request.outputs.publish }}
+      tag: ${{ steps.request.outputs.tag }}
+      ver: ${{ steps.request.outputs.ver }}
+      commit_firmware: ${{ steps.request.outputs.commit_firmware }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate request and embedded version
+        id: request
+        run: python3 scripts/resolve_release_request.py
+
+  release:
+    needs: request
+    if: ${{ needs.request.outputs.publish == 'true' }}
+    name: Build and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 Arduino core
+        shell: bash
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls \
+            https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}"
+
+      - name: Build release firmware
+        env:
+          RELEASE_VERSION: ${{ needs.request.outputs.ver }}
+        run: bash scripts/build_firmware.sh
+
+      - name: Resolve artifact names
+        id: artifacts
+        shell: bash
+        env:
+          VER: ${{ needs.request.outputs.ver }}
+        run: |
+          PREFIX="ESP32-CAM_MJPEG2SD-${VER}-esp32s3-n16r8"
+          echo "prefix=${PREFIX}" >> "$GITHUB_OUTPUT"
+          echo "ota=dist/${PREFIX}-ota.bin" >> "$GITHUB_OUTPUT"
+          echo "full=dist/${PREFIX}-full.bin" >> "$GITHUB_OUTPUT"
+          echo "elf=dist/${PREFIX}.elf" >> "$GITHUB_OUTPUT"
+          echo "data=dist/${PREFIX}-data.zip" >> "$GITHUB_OUTPUT"
+          echo "firmware=firmware/${PREFIX}-full.bin" >> "$GITHUB_OUTPUT"
+
+      - name: Commit full-flash firmware image
+        if: ${{ needs.request.outputs.commit_firmware == 'true' }}
+        shell: bash
+        run: |
+          mkdir -p firmware
+          cp "${{ steps.artifacts.outputs.full }}" "${{ steps.artifacts.outputs.firmware }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${{ steps.artifacts.outputs.firmware }}"
+          if git diff --cached --quiet; then
+            echo "Firmware image already committed"
+          else
+            git commit -m "Add ${{ steps.artifacts.outputs.prefix }} release image"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Create tag
+        shell: bash
+        env:
+          TAG: ${{ needs.request.outputs.tag }}
+        run: |
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists"
+            exit 1
+          fi
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.request.outputs.tag }}
+          VER: ${{ needs.request.outputs.ver }}
+          OTA: ${{ steps.artifacts.outputs.ota }}
+          FULL: ${{ steps.artifacts.outputs.full }}
+          ELF: ${{ steps.artifacts.outputs.elf }}
+          DATA: ${{ steps.artifacts.outputs.data }}
+        run: |
+          set -euo pipefail
+
+          NOTES="ESP32-CAM_MJPEG2SD ${VER} for the ESP32-S3-CAM OV3660 N16R8 target. The -full.bin image is a complete merged USB/serial flash image starting at 0x0. The -ota.bin file is the application image for OTA updates. The data ZIP contains the SD-card web UI assets."
+
+          ASSETS=(
+            "$FULL"
+            "$OTA"
+            "$ELF"
+            "$DATA"
+            "dist/BUILD_INFO.txt"
+          )
+
+          printf 'Release assets:\n'
+          printf '  %s\n' "${ASSETS[@]}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" \
+              "${ASSETS[@]}" \
+              --title "$TAG" \
+              --notes "$NOTES"
+          fi
