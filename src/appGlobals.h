@@ -33,7 +33,7 @@
 #define DOT_MAX 50
 #define HOSTNAME_GRP 99
  
-#define APP_VER "10.9.5"
+#define APP_VER "10.10.0"
 // to determine if newer data files need to be loaded
 #define CFG_VER 39
 
