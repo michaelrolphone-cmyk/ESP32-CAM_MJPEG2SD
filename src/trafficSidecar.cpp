@@ -9,6 +9,7 @@
 
 #define BOARD_ID_LEN 16
 #define TRAFFIC_LOG_PATH "/traffic_log.csv"
+#define TRAFFIC_TASK_STACK 8192
 
 char boardId[BOARD_ID_LEN] = "cam-1";
 float clipMotionPeak = 0.0f;
@@ -211,7 +212,7 @@ void trafficSetup() {
 #ifndef AUXILIARY
   applyProfileOnce();
   trafficQueueSetup();
-  xTaskCreatePinnedToCore(trafficTask, "traffic", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(trafficTask, "traffic", TRAFFIC_TASK_STACK, NULL, 1, NULL, 1);
   LOG_INF("traffic monitor ready (event AVI + sidecar + vision queue)");
 #endif
 }
