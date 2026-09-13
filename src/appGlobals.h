@@ -26,14 +26,14 @@
 #endif
 #include "camera_pins.h"
 
+#define APP_VER "10.10.1"
+
 #define DEBUG_MEM false // leave as false
 #define FLUSH_DELAY 0 // for debugging crashes
 #define DBG_ON false // esp debug output
 #define DBG_LVL ESP_LOG_ERROR // level to use if DBG_ON true: ESP_LOG_ERROR, ESP_LOG_WARN, ESP_LOG_INFO, ESP_LOG_DEBUG, ESP_LOG_VERBOSE
 #define DOT_MAX 50
 #define HOSTNAME_GRP 99
- 
-#define APP_VER "10.10.0"
 // to determine if newer data files need to be loaded
 #define CFG_VER 39
 
