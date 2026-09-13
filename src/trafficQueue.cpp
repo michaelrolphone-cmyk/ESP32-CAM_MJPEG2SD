@@ -135,7 +135,7 @@ static void writeReview(const TrafficJob* j) {
   snprintf(reviewPath, sizeof(reviewPath), "%s/%s.review.json", folder, j->id);
   File f = STORAGE.open(reviewPath, FILE_WRITE); if (!f) return;
   f.printf("{\n  \"id\": \"%s\",\n  \"board_id\": \"%s\",\n  \"avi\": \"%s\",\n  \"still\": \"%s\",\n  \"status\": \"done\",\n  \"class\": \"%s\",\n  \"still_bytes\": %lu,\n  \"avi_bytes\": %lu,\n  \"analyzed\": \"%s\"\n}\n",
-    j->id, boardId, j->avi, j->still, j->className[0] ? j->className : "unknown",
+    j->id, CAM_BOARD, j->avi, j->still, j->className[0] ? j->className : "unknown",
     (unsigned long)j->stillBytes, (unsigned long)j->aviBytes, ts);
   f.close();
 }
