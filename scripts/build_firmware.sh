@@ -24,6 +24,7 @@ rm -rf "$BUILD_DIR" "$DIST_DIR"
 mkdir -p "$BUILD_DIR" "$DIST_DIR"
 
 echo "Building ESP32-CAM_MJPEG2SD ${VERSION}"
+arduino-cli version
 echo "Core: esp32:esp32@${ESP32_CORE_VERSION}"
 echo "FQBN: ${FQBN}"
 
